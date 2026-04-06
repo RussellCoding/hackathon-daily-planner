@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useAuth0 } from '@auth0/auth0-react';
 import TaskList from './taskList';
 import AgentPanel from './agentPanel';
@@ -139,8 +139,31 @@ function getInitials(name) {
 }
 
 export default function Planner() {
-  const { user, logout } = useAuth0();
+  const { user, logout, getAccessTokenSilently } = useAuth0();
+  const [googleToken, setGoogleToken] = useState(null);
   const d = getDateInfo();
+
+  
+useEffect(() => {
+  // Try to get Google token from URL hash after OAuth redirect
+  const hash = window.location.hash;
+  if (hash) {
+    const params = new URLSearchParams(hash.substring(1));
+    const token = params.get('access_token');
+    if (token) {
+      setGoogleToken(token);
+      window.history.replaceState(null, '', window.location.pathname);
+      return;
+    }
+  }
+  // Fallback: try getAccessTokenSilently with Google connection
+  getAccessTokenSilently({
+    authorizationParams: {
+      connection: 'google-oauth2',
+      scope: 'https://www.googleapis.com/auth/gmail.send',
+    },
+  }).then(setGoogleToken).catch(() => null);
+}, [getAccessTokenSilently]);
 
   return (
     <div style={s.root}>
@@ -192,7 +215,7 @@ export default function Planner() {
         </div>
 
         <div style={s.rightCol}>
-          <AgentPanel user={user} />
+          <AgentPanel user={user} googleToken={googleToken} />
         </div>
       </div>
     </div>

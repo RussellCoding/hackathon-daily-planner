@@ -1,10 +1,9 @@
 import React, { useState } from 'react';
 import { useAuth0 } from '@auth0/auth0-react';
 
-const AUTH0_DOMAIN = process.env.REACT_APP_AUTH0_DOMAIN;
-const AUTH0_CLIENT_ID = process.env.REACT_APP_AUTH0_CLIENT_ID;
 const TOKEN_VAULT_CONNECTION = process.env.REACT_APP_TOKEN_VAULT_CONNECTION;
-const ANTHROPIC_API_KEY = process.env.REACT_APP_ANTHROPIC_API_KEY;
+const GROQ_API_KEY = process.env.REACT_APP_GROQ_API_KEY;
+
 const s = {
   card: {
     background: '#161616',
@@ -71,6 +70,15 @@ const s = {
     fontFamily: 'DM Mono, monospace',
     fontSize: 11,
     letterSpacing: '0.06em',
+  },
+  bubbleSuccess: {
+    background: 'rgba(74,222,128,0.06)',
+    border: '1px solid rgba(74,222,128,0.2)',
+    color: '#4ade80',
+    borderBottomLeftRadius: 3,
+    fontFamily: 'DM Mono, monospace',
+    fontSize: 11,
+    letterSpacing: '0.04em',
   },
   actions: {
     display: 'flex',
@@ -169,64 +177,107 @@ const s = {
 };
 
 const QUICK_ACTIONS = [
-  { icon: '→', label: 'Schedule my tasks in Google Calendar' },
-  { icon: '→', label: 'Send me a morning briefing via Gmail' },
+  { icon: '→', label: 'Send me a daily briefing email' },
+  { icon: '→', label: 'Email me a summary of my tasks' },
   { icon: '→', label: 'Suggest habits for tomorrow' },
 ];
 
 const INIT_MESSAGES = [
   {
     role: 'agent',
-    text: "Hi! I'm your DayAgent. I can schedule tasks in your Google Calendar, send daily briefings via Gmail, and suggest habits. What would you like to do today?",
+    text: "Hi! I'm your DayAgent. I can send you daily briefings and task summaries via Gmail, and suggest habits. What would you like to do?",
   },
 ];
 
-async function callClaude(messages, userContext) {
-  const systemPrompt = `You are DayAgent, a helpful daily planning assistant. The user is logged in via Auth0.
+function makeGmailMessage(to, subject, body) {
+  const message = [
+    `To: ${to}`,
+    `Subject: ${subject}`,
+    'Content-Type: text/plain; charset=utf-8',
+    '',
+    body,
+  ].join('\n');
+  return btoa(unescape(encodeURIComponent(message)))
+    .replace(/\+/g, '-')
+    .replace(/\//g, '_')
+    .replace(/=+$/, '');
+}
+
+async function sendGmail(googleToken, to, subject, body) {
+  const raw = makeGmailMessage(to, subject, body);
+  const response = await fetch('https://gmail.googleapis.com/gmail/v1/users/me/messages/send', {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${googleToken}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ raw }),
+  });
+  if (!response.ok) {
+    const err = await response.json();
+    throw new Error(err.error?.message || 'Gmail send failed');
+  }
+  return await response.json();
+}
+
+async function callGroq(messages, userContext, shouldSendEmail) {
+  const systemPrompt = `You are DayAgent, a helpful daily planning assistant integrated with Gmail via Auth0 Token Vault.
+The user is: ${JSON.stringify(userContext)}
+Today's date: ${new Date().toDateString()}
+
 Your capabilities:
-- Suggest tasks and habits based on the user's day
-- Schedule tasks into Google Calendar (via Auth0 Token Vault)
-- Send daily briefing summaries via Gmail (via Auth0 Token Vault)
+- Send daily briefing emails via Gmail (you actually have access to do this)
+- Suggest tasks and habits
+- Help plan the user's day
 
-User context: ${JSON.stringify(userContext)}
+${shouldSendEmail
+  ? `IMPORTANT: The user wants to send an email. Respond with ONLY a JSON object, no other text:
+{
+  "sendEmail": true,
+  "subject": "email subject here",
+  "body": "full email body here",
+  "reply": "what you say to the user after sending"
+}
+Make the email warm and useful. Sign it as DayAgent.`
+  : `Keep responses concise, warm, and actionable. Plain text only.`}`;
 
-Keep responses concise, warm, and actionable. When the user asks to schedule something or send an email, 
-confirm what you'll do and describe the action clearly. In a real deployment, you would use the 
-Token Vault-secured Google API tokens to actually perform these actions.`;
-
-  const response = await fetch('https://api.anthropic.com/v1/messages', {
+  const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      'x-api-key': ANTHROPIC_API_KEY,
-      'anthropic-version': '2023-06-01',
+      'Authorization': `Bearer ${GROQ_API_KEY}`,
     },
     body: JSON.stringify({
-      model: 'claude-sonnet-4-20250514',
-      max_tokens: 400,
-      system: systemPrompt,
-      messages: messages.map(m => ({
-        role: m.role === 'agent' ? 'assistant' : 'user',
-        content: m.text,
-      })),
+      model: 'llama-3.3-70b-versatile',
+      max_tokens: 600,
+      messages: [
+        { role: 'system', content: systemPrompt },
+        ...messages.map(m => ({
+          role: m.role === 'agent' ? 'assistant' : 'user',
+          content: m.text,
+        })),
+      ],
     }),
   });
 
   const data = await response.json();
-  return data.content?.[0]?.text || 'Sorry, I had trouble responding. Please try again.';
+  const text = data.choices?.[0]?.message?.content || '';
+
+  if (shouldSendEmail) {
+    try {
+      const parsed = JSON.parse(text);
+      return parsed;
+    } catch {
+      return { sendEmail: false, reply: text };
+    }
+  }
+
+  return { sendEmail: false, reply: text };
 }
 
-// Stub for Token Vault: in production, exchange Auth0 access token for a
-// vault-secured Google token, then use it to call Google Calendar / Gmail APIs.
-async function getVaultToken(auth0AccessToken, connection) {
-  // POST https://{AUTH0_DOMAIN}/oauth/token with grant_type=urn:ietf:params:oauth:grant-type:token-vault
-  // Returns a Google OAuth token scoped to the connection
-  // See: https://auth0.com/features/token-vault
-  console.log('[Token Vault] Would exchange token for connection:', connection);
-  return null; // replace with real implementation
-}
+const EMAIL_TRIGGERS = ['email', 'send', 'gmail', 'briefing', 'summary', 'mail'];
 
-export default function AgentPanel({ user }) {
+export default function AgentPanel({ user, googleToken }) {
   const { getAccessTokenSilently } = useAuth0();
   const [messages, setMessages] = useState(INIT_MESSAGES);
   const [input, setInput] = useState('');
@@ -242,20 +293,38 @@ export default function AgentPanel({ user }) {
     setMessages(nextMessages);
     setLoading(true);
 
-    try {
-      // Get Auth0 access token (Token Vault flow starts here)
-      const accessToken = await getAccessTokenSilently().catch(() => null);
-      if (accessToken) {
-        await getVaultToken(accessToken, TOKEN_VAULT_CONNECTION);
-      }
+    const shouldSendEmail = EMAIL_TRIGGERS.some(t => msg.toLowerCase().includes(t));
 
+    try {
       const userContext = { name: user?.name, email: user?.email };
-      const reply = await callClaude(nextMessages, userContext);
-      setMessages(m => [...m, { role: 'agent', text: reply }]);
+      const result = await callGroq(nextMessages, userContext, shouldSendEmail);
+
+      if (result.sendEmail && googleToken && user?.email) {
+        try {
+          await sendGmail(googleToken, user.email, result.subject, result.body);
+          setMessages(m => [
+            ...m,
+            { role: 'agent', text: result.reply || 'Email sent!' },
+            { role: 'success', text: `✓ email sent to ${user.email}` },
+          ]);
+        } catch (emailErr) {
+          setMessages(m => [...m, {
+            role: 'agent',
+            text: `I composed your email but couldn't send it: ${emailErr.message}. Make sure you signed in with Google.`,
+          }]);
+        }
+      } else if (result.sendEmail && !googleToken) {
+        setMessages(m => [...m, {
+          role: 'agent',
+          text: "To send emails, please sign out and sign back in using 'Continue with Google' so I can get Gmail access.",
+        }]);
+      } else {
+        setMessages(m => [...m, { role: 'agent', text: result.reply }]);
+      }
     } catch (err) {
       setMessages(m => [...m, {
         role: 'agent',
-        text: "I couldn't connect right now. Make sure your Anthropic API key is set in AgentPanel.js.",
+        text: "I couldn't connect right now. Check that your REACT_APP_GROQ_API_KEY is set in .env",
       }]);
     } finally {
       setLoading(false);
@@ -278,14 +347,16 @@ export default function AgentPanel({ user }) {
 
       <div style={s.vaultStatus}>
         <div style={s.vaultDot} />
-        <span style={s.vaultText}>Auth0 Token Vault · Google Calendar · Gmail</span>
+        <span style={s.vaultText}>
+          Auth0 Token Vault · Gmail {googleToken ? '· connected' : '· sign in with Google to enable'}
+        </span>
       </div>
 
       <div style={s.messages}>
         {messages.map((m, i) => (
           <div key={i} style={{
             ...s.bubble,
-            ...(m.role === 'agent' ? s.bubbleAgent : s.bubbleUser),
+            ...(m.role === 'agent' ? s.bubbleAgent : m.role === 'success' ? s.bubbleSuccess : s.bubbleUser),
           }}>
             {m.text}
           </div>
