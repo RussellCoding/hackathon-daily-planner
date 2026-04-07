@@ -9,11 +9,10 @@ root.render(
   <Auth0Provider
     domain="dev-2gdq7mp53jmaw3oh.us.auth0.com"
     clientId="q4slfgFT9lMgKwuT5gRgfbDFsD6lXtVs"
-  authorizationParams={{
-    redirect_uri: window.location.origin,
-    scope: 'openid profile email https://www.googleapis.com/auth/gmail.send',
-    connection: 'google-oauth2',
- }}
+    authorizationParams={{
+      redirect_uri: window.location.origin,
+      scope: 'openid profile email offline_access https://www.googleapis.com/auth/gmail.send',
+    }}
   >
     <App />
   </Auth0Provider>

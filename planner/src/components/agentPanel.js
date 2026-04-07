@@ -178,8 +178,8 @@ const s = {
 
 const QUICK_ACTIONS = [
   { icon: '→', label: 'Send me a daily briefing email' },
-  { icon: '→', label: 'Email me a summary of my tasks' },
-  { icon: '→', label: 'Suggest habits for tomorrow' },
+  { icon: '→', label: 'Add a task: review my goals for the week' },
+  { icon: '→', label: 'Suggest 3 tasks I should do today' },
 ];
 
 const INIT_MESSAGES = [
@@ -220,13 +220,14 @@ async function sendGmail(googleToken, to, subject, body) {
   return await response.json();
 }
 
-async function callGroq(messages, userContext, shouldSendEmail) {
+async function callGroq(messages, userContext, shouldSendEmail, shouldAddTask) {
   const systemPrompt = `You are DayAgent, a helpful daily planning assistant integrated with Gmail via Auth0 Token Vault.
 The user is: ${JSON.stringify(userContext)}
 Today's date: ${new Date().toDateString()}
 
 Your capabilities:
 - Send daily briefing emails via Gmail (you actually have access to do this)
+- Add tasks directly to the user's task list (you actually have access to do this)
 - Suggest tasks and habits
 - Help plan the user's day
 
@@ -239,6 +240,12 @@ ${shouldSendEmail
   "reply": "what you say to the user after sending"
 }
 Make the email warm and useful. Sign it as DayAgent.`
+  : shouldAddTask
+  ? `IMPORTANT: The user wants to add one or more tasks to their list. Respond with ONLY a JSON object, no other text:
+{
+  "addTasks": ["task one", "task two"],
+  "reply": "what you say to the user confirming the tasks were added"
+}`
   : `Keep responses concise, warm, and actionable. Plain text only.`}`;
 
   const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
@@ -263,21 +270,22 @@ Make the email warm and useful. Sign it as DayAgent.`
   const data = await response.json();
   const text = data.choices?.[0]?.message?.content || '';
 
-  if (shouldSendEmail) {
+  if (shouldSendEmail || shouldAddTask) {
     try {
       const parsed = JSON.parse(text);
       return parsed;
     } catch {
-      return { sendEmail: false, reply: text };
+      return { sendEmail: false, addTasks: null, reply: text };
     }
   }
 
-  return { sendEmail: false, reply: text };
+  return { sendEmail: false, addTasks: null, reply: text };
 }
 
 const EMAIL_TRIGGERS = ['email', 'send', 'gmail', 'briefing', 'summary', 'mail'];
+const TASK_TRIGGERS = ['add', 'create task', 'add task', 'put on my list', 'add to my list', 'remind me to', 'schedule'];
 
-export default function AgentPanel({ user, googleToken }) {
+export default function AgentPanel({ user, googleToken, tasks, onAddTask }) {
   const { getAccessTokenSilently } = useAuth0();
   const [messages, setMessages] = useState(INIT_MESSAGES);
   const [input, setInput] = useState('');
@@ -294,10 +302,11 @@ export default function AgentPanel({ user, googleToken }) {
     setLoading(true);
 
     const shouldSendEmail = EMAIL_TRIGGERS.some(t => msg.toLowerCase().includes(t));
+    const shouldAddTask = !shouldSendEmail && TASK_TRIGGERS.some(t => msg.toLowerCase().includes(t));
 
     try {
-      const userContext = { name: user?.name, email: user?.email };
-      const result = await callGroq(nextMessages, userContext, shouldSendEmail);
+      const userContext = { name: user?.name, email: user?.email, currentTasks: tasks.map(t => t.text) };
+      const result = await callGroq(nextMessages, userContext, shouldSendEmail, shouldAddTask);
 
       if (result.sendEmail && googleToken && user?.email) {
         try {
@@ -318,6 +327,13 @@ export default function AgentPanel({ user, googleToken }) {
           role: 'agent',
           text: "To send emails, please sign out and sign back in using 'Continue with Google' so I can get Gmail access.",
         }]);
+      } else if (result.addTasks && result.addTasks.length > 0) {
+        result.addTasks.forEach(task => onAddTask(task));
+        setMessages(m => [
+          ...m,
+          { role: 'agent', text: result.reply || `Added ${result.addTasks.length} task(s) to your list.` },
+          { role: 'success', text: `✓ added: ${result.addTasks.join(', ')}` },
+        ]);
       } else {
         setMessages(m => [...m, { role: 'agent', text: result.reply }]);
       }

@@ -111,16 +111,16 @@ const s = {
     fontFamily: 'DM Mono, monospace',
     letterSpacing: '0.06em',
   },
+  agentAdded: {
+    fontFamily: 'DM Mono, monospace',
+    fontSize: 9,
+    color: 'rgba(74,222,128,0.5)',
+    letterSpacing: '0.06em',
+    marginLeft: 2,
+  },
 };
 
-const DEFAULTS = [
-  { id: 1, text: 'Review linear algebra notes', done: false },
-  { id: 2, text: 'Update PR', done: false },
-  { id: 3, text: 'Complete cryptography problem set', done: true },
-];
-
-export default function TaskList() {
-  const [tasks, setTasks] = useState(DEFAULTS);
+export default function TaskList({ tasks, setTasks }) {
   const [input, setInput] = useState('');
 
   const add = () => {
@@ -140,6 +140,11 @@ export default function TaskList() {
         .add-btn:hover { background: rgba(232,213,176,0.18) !important; }
         .delete-btn:hover { color: rgba(248,113,113,0.7) !important; }
         .checkbox-wrap:hover { border-color: rgba(74,222,128,0.5) !important; }
+        @keyframes taskSlideIn {
+          from { opacity: 0; transform: translateX(-8px); }
+          to { opacity: 1; transform: translateX(0); }
+        }
+        .task-new { animation: taskSlideIn 0.25s ease both; }
       `}</style>
 
       <div style={s.cardHeader}>
@@ -164,7 +169,7 @@ export default function TaskList() {
       )}
 
       {tasks.map(task => (
-        <div key={task.id} style={s.taskItem}>
+        <div key={task.id} style={s.taskItem} className={task.agentAdded ? 'task-new' : ''}>
           <div
             style={{ ...s.checkbox, ...(task.done ? s.checkboxDone : {}) }}
             className="checkbox-wrap"
@@ -178,6 +183,7 @@ export default function TaskList() {
           </div>
           <span style={{ ...s.taskText, ...(task.done ? s.taskTextDone : {}) }}>
             {task.text}
+            {task.agentAdded && <span style={s.agentAdded}> · agent</span>}
           </span>
           <button style={s.deleteBtn} className="delete-btn" onClick={() => remove(task.id)}>×</button>
         </div>

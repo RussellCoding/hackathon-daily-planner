@@ -121,6 +121,8 @@ const s = {
   },
 };
 
+const DEFAULT_TASKS = [];
+
 function getDateInfo() {
   const now = new Date();
   const days = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
@@ -141,29 +143,20 @@ function getInitials(name) {
 export default function Planner() {
   const { user, logout, getAccessTokenSilently } = useAuth0();
   const [googleToken, setGoogleToken] = useState(null);
+  const [tasks, setTasks] = useState(DEFAULT_TASKS);
   const d = getDateInfo();
 
-  
-useEffect(() => {
-  // Try to get Google token from URL hash after OAuth redirect
-  const hash = window.location.hash;
-  if (hash) {
-    const params = new URLSearchParams(hash.substring(1));
-    const token = params.get('access_token');
-    if (token) {
-      setGoogleToken(token);
-      window.history.replaceState(null, '', window.location.pathname);
-      return;
-    }
-  }
-  // Fallback: try getAccessTokenSilently with Google connection
-  getAccessTokenSilently({
-    authorizationParams: {
-      connection: 'google-oauth2',
-      scope: 'https://www.googleapis.com/auth/gmail.send',
-    },
-  }).then(setGoogleToken).catch(() => null);
-}, [getAccessTokenSilently]);
+  const addTask = (text) => {
+    setTasks(t => [...t, { id: Date.now(), text: text.trim(), done: false }]);
+  };
+
+  useEffect(() => {
+    getAccessTokenSilently({
+      authorizationParams: {
+        scope: 'openid profile email https://www.googleapis.com/auth/gmail.send',
+      },
+    }).then(setGoogleToken).catch(() => null);
+  }, [getAccessTokenSilently]);
 
   return (
     <div style={s.root}>
@@ -211,11 +204,11 @@ useEffect(() => {
         </div>
 
         <div style={s.leftCol}>
-          <TaskList />
+          <TaskList tasks={tasks} setTasks={setTasks} />
         </div>
 
         <div style={s.rightCol}>
-          <AgentPanel user={user} googleToken={googleToken} />
+          <AgentPanel user={user} googleToken={googleToken} tasks={tasks} onAddTask={addTask} />
         </div>
       </div>
     </div>
